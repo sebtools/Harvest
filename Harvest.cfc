@@ -15,6 +15,8 @@
 		<definition name="tasks" xmlpath="/tasks/task" columns="id,name,billable_by_default,deactivated,default_hourly_rate,is_default,updated_at,created_at" />
 		<definition name="people" xmlpath="/users/user" columns="id,email,first_name,last_name,has_access_to_all_future_projects,default_hourly_rate,is_active,is_admin,is_contractor,telephone,department,timezone,updated_at,created_at" />
 		<definition name="daily" xmlpath="/daily/day_entries/day_entry" columns="id,spent_at,user_id,client,project_id,task_id,task,hours,notes,time_started_at,created_at,updated_at,started_at,ended_at" />
+		<definition name="task_assignments" xmlpath="/task-assignments/task-assignment" columns="id,project_id,task_id,billable,deactivated,budget,hourly_rate,updated_at,created_at" />
+		<definition name="user_assignments" xmlpath="/user-assignments/user-assignment" columns="id,user_id,project_id,deactivated,hourly_rate,is_project_manager,updated_at,created_at" />
 	</harvest>
 	</cfsavecontent>
 	<cfset loadDefinitions()>
@@ -66,11 +68,54 @@
 	<cfreturn result>
 </cffunction>
 
+<cffunction name="getProjectName" access="public" returntype="string" output="no">
+	<cfargument name="project_id" type="numeric" required="true">
+	
+	<cfset var xResults = getData(path="/projects",format="xml")>
+	<cfset var axSearch = XmlSearch(xResults,"#sDefinitions['/projects'].xmlpath#[id=#Arguments.project_id#]/name")>
+	<cfset var result = "">
+	
+	<cfif ArrayLen(axSearch) EQ 1>
+		<cfset result = axSearch[1].XmlText>
+	</cfif>
+	
+	<cfreturn result>
+</cffunction>
+
+<cffunction name="getProjectUserID" access="public" returntype="string" output="no">
+	<cfargument name="user_id" type="numeric" required="true">
+	<cfargument name="project_id" type="string" required="true">
+	
+	<cfset var xResults = getData(path="/projects/#Arguments.project_id#/user_assignments",format="xml",key="user_assignments")>
+	<cfset var axSearch = XmlSearch(xResults,"#sDefinitions['/user_assignments'].xmlpath#[user-id='#Arguments.user_id#']/id")>
+	<cfset var result = "">
+	
+	<cfif ArrayLen(axSearch) EQ 1>
+		<cfset result = axSearch[1].XmlText>
+	</cfif>
+	
+	<cfreturn result>
+</cffunction>
+
 <cffunction name="getTaskID" access="public" returntype="string" output="no">
 	<cfargument name="Name" type="string" required="true">
 	
 	<cfset var xResults = getData(path="/tasks",format="xml")>
 	<cfset var axSearch = XmlSearch(xResults,"#sDefinitions['/tasks'].xmlpath#[name='#Arguments.name#']/id")>
+	<cfset var result = "">
+	
+	<cfif ArrayLen(axSearch) EQ 1>
+		<cfset result = axSearch[1].XmlText>
+	</cfif>
+	
+	<cfreturn result>
+</cffunction>
+
+<cffunction name="getTaskName" access="public" returntype="string" output="no">
+	<cfargument name="task_id" type="numeric" required="true">
+	
+	<cfset var xResults = getData(path="/tasks",format="xml")>
+	<cfset var axSearch = XmlSearch(xResults,"#sDefinitions['/tasks'].xmlpath#[id=#Arguments.task_id#]/name")>
 	<cfset var result = "">
 	
 	<cfif ArrayLen(axSearch) EQ 1>
@@ -87,9 +132,21 @@
 	<cfargument name="hours" type="numeric" required="true">
 	<cfargument name="spent_at" type="date" required="true">
 	
-	<cfset var xResults = getData(path="/daily",format="xml")>
-	<cfset var axSearch = XmlSearch(xResults,"#sDefinitions['/daily'].xmlpath#[user_id='#Arguments.user_id#'][project_id='#Arguments.project_id#'][task_id='#Arguments.task_id#'][hours='#Arguments.hours#'][spent_at='#Arguments.spent_at#']/id")>
+	<cfset var path = "/daily">
+	<cfset var xResults = 0>
+	<cfset var axSearch = 0>
 	<cfset var result = "">
+	<cfset var searchxml = "">
+	
+	<cfif StructKeyExists(Arguments,"spent_at") AND isDate(Arguments.spent_at)>
+		<cfset path = "#path#/#DayOfYear(Arguments.spent_at)#/#Year(Arguments.spent_at)#">
+	</cfif>
+	
+	<cfset xResults = getData(path=path,format="xml")>
+	
+	<cfset searchxml = "#sDefinitions['/daily'].xmlpath#[user_id='#Arguments.user_id#'][project_id='#Arguments.project_id#'][hours='#NumberFormat(Arguments.hours,"0.00")#'][spent_at='#DateFormat(Arguments.spent_at,"yyyy-mm-dd")#']/id"><!--- [task_id='#Arguments.task_id#'] --->
+	
+	<cfset axSearch = XmlSearch(xResults,searchxml)>
 	
 	<cfif ArrayLen(axSearch)>
 		<cfset result = axSearch[ArrayLen(axSearch)].XmlText>
@@ -125,7 +182,7 @@
 	<cfset var path = "/contacts">
 	
 	<cfif StructKeyExists(Arguments,"client_id")>
-		<cfset path = "/clients/###Arguments.client_id#/contacts">
+		<cfset path = "/clients/#Arguments.client_id#/contacts">
 	</cfif>
 	
 	<cfreturn getData(path,Arguments)>
@@ -136,9 +193,37 @@
 	<cfreturn getData("/projects",Arguments)>
 </cffunction>
 
-<cffunction name="getTasks" access="public" output="no">
+<cffunction name="getProjectUsers" access="public" output="no">
+	<cfargument name="project_id" type="numeric" required="true">
 	
-	<cfreturn getData("/tasks",Arguments)>
+	<cfreturn getData(Path="/projects/#Arguments.project_id#/user_assignments",Args=Arguments,key="user_assignments")>
+</cffunction>
+
+<cffunction name="getTasks" access="public" output="no">
+	<cfargument name="project_id" type="numeric" required="false">
+	
+	<cfset var qResults = getData("/tasks",Arguments)>
+	<cfset var qTaskAssignments = 0>
+	<cfset var taskids = "">
+	
+	<!--- Filter tasks by those assigned to the given project --->
+	<cfif StructKeyExists(Arguments,"project_id")>
+		<cfset qTaskAssignments = getData(path="/projects/#Arguments.project_id#/task_assignments",key="task_assignments")>
+		<cfset taskids = ValueList(qTaskAssignments.task_id)>
+		
+		<cfquery name="qResults" dbtype="query">
+		SELECT	*
+		FROM	qResults
+		WHERE	1 = 1
+		<cfif Len(taskids)>
+			AND	id IN (#taskids#)
+		<cfelse>
+			AND	1 = 0
+		</cfif>
+		</cfquery>
+	</cfif>
+	
+	<cfreturn qResults>
 </cffunction>
 
 <cffunction name="getTimeEntries" access="public" output="no">
@@ -150,7 +235,7 @@
 		<cfset Arguments.date = DateAdd("d",-1,now())>
 	</cfif>
 	
-	<cfset path = "/daily/###DayOfYear(Arguments.date)#/###Year(Arguments.date)#">
+	<cfset path = "/daily/#DayOfYear(Arguments.date)#/#Year(Arguments.date)#">
 	
 	<cfreturn getData(path,Arguments)>
 </cffunction>
@@ -180,8 +265,8 @@
 	</cfif>
 	
 	<cfif StructKeyExists(Arguments,"id")>
-		<cfset sArgs.path = "#sArgs.path####Arguments.id#">
-		<cfset sArgs.method = "POST">
+		<cfset sArgs.path = "#sArgs.path#/#Arguments.id#">
+		<cfset sArgs.method = "PUT">
 	</cfif>
 	
 	<cfsavecontent variable="sArgs.xml"><cfoutput>
@@ -213,7 +298,7 @@
 	<cfset var sArgs = makeAPIArgs("/contacts/")>
 	
 	<cfif StructKeyExists(Arguments,"id")>
-		<cfset sArgs.path = "#sArgs.path####Arguments.id#">
+		<cfset sArgs.path = "#sArgs.path#/#Arguments.id#">
 		<cfset sArgs.method = "PUT">
 	</cfif>
 	
@@ -241,9 +326,15 @@
 	<cfargument name="active" type="boolean" required="false">
 	
 	<cfset var sArgs = makeAPIArgs("/projects")>
+	<cfset var result = 0>
+	<cfset var user_id = 0>
 	
-	<cfif StructKeyExists(Arguments,"id")>
-		<cfset sArgs.path = "#sArgs.path####Arguments.id#">
+	<cfif NOT StructKeyExists(Arguments,"id")>
+		<cfset Arguments.id = getProjectID(ArgumentCollection=Arguments)>
+	</cfif>
+	
+	<cfif Val(Arguments.id)>
+		<cfset sArgs.path = "#sArgs.path#/#Arguments.id#">
 		<cfset sArgs.method = "PUT">
 	</cfif>
 	
@@ -262,7 +353,39 @@
 	
 	<cfset callAPI(ArgumentCollection=sArgs)>
 	
-	<cfreturn getProjectID(name=Arguments.name,client_id=Arguments.client_id)>
+	<cfset result = getProjectID(name=Arguments.name,client_id=Arguments.client_id)>
+	
+	<cfif StructKeyExists(Arguments,"users") AND Len(Arguments.users)>
+		<cfloop list="#Arguments.users#" index="user_id">
+			<cftry>
+				<cfset saveProjectUser(project_id=result,user_id=user_id)>
+			<cfcatch>
+				<cfthrow message="#CFCATCH.Message#" detail="project_id=#result#,user_id=#user_id#">
+			</cfcatch>
+			</cftry>
+		</cfloop>
+	</cfif>
+	
+	<cfreturn result>
+</cffunction>
+
+<cffunction name="saveProjectUser" access="public" output="no">
+	<cfargument name="project_id" type="numeric" required="true">
+	<cfargument name="user_id" type="numeric" required="true">
+	
+	<cfset var sArgs = makeAPIArgs("/projects/")>
+	
+	<cfset sArgs.path = "#sArgs.path#/#Arguments.project_id#/user_assignments">
+	
+	<cfsavecontent variable="sArgs.xml"><cfoutput>
+	<user>
+		<id type="integer">#Arguments.user_id#</id>
+	</user>
+	</cfoutput></cfsavecontent>
+	
+	<cfset callAPI(ArgumentCollection=sArgs)>
+	
+	<cfreturn getProjectUserID(user_id=Arguments.user_id,project_id=Arguments.project_id)>
 </cffunction>
 
 <cffunction name="saveTask" access="public" output="no">
@@ -274,15 +397,15 @@
 	<cfset var sArgs = makeAPIArgs("/tasks/")>
 	
 	<cfif StructKeyExists(Arguments,"id")>
-		<cfset sArgs.path = "#sArgs.path####Arguments.id#">
+		<cfset sArgs.path = "#sArgs.path#/#Arguments.id#">
 		<cfset sArgs.method = "PUT">
 	</cfif>
 	
 	<cfsavecontent variable="sArgs.xml"><cfoutput>
 	<task>
-		<billable-by-default type="boolean"><cfif Arguments.billable_by_default>true<cfelse>false</cfif></active></billable-by-default>
-		<default-hourly-rate type="decimal">#Arguments.default_hourly_rate#</default-hourly-rate>
-		<is-default type="boolean"><cfif Arguments.is_default>true<cfelse>false</cfif></active></is-default>
+		<billable-by-default type="boolean"><cfif Arguments.billable_by_default>true<cfelse>false</cfif></billable-by-default>
+		<cfif StructKeyExists(Arguments,"default_hourly_rate")><default-hourly-rate type="decimal">#Arguments.default_hourly_rate#</default-hourly-rate></cfif>
+		<is-default type="boolean"><cfif Arguments.is_default>true<cfelse>false</cfif></is-default>
 		<name>#XmlFormat(Arguments.name)#</name>
 	</task>
 	</cfoutput></cfsavecontent>
@@ -295,29 +418,46 @@
 <cffunction name="saveTimeEntry" access="public" output="no">
 	<cfargument name="project_id" type="numeric" required="true">
 	<cfargument name="task_id" type="numeric" required="true">
+	<cfargument name="user_id" type="numeric" required="true">
 	<cfargument name="hours" type="numeric" required="true">
 	<cfargument name="spent_at" type="date" required="true">
 	<cfargument name="notes" type="string" required="false">
 	
+	<cfset var qTasks = getTasks(project_id=Arguments.project_id)>
+	<cfset var qUser = getUsers(id=Arguments.user_id)>
+	<cfset var qUsers = getProjectUsers(project_id=Arguments.project_id)>
 	<cfset var sArgs = makeAPIArgs("/daily/add")>
 	
+	<cfset sArgs.method = "POST">
+	
 	<cfif StructKeyExists(Arguments,"id")>
-		<cfset sArgs.path = "#sArgs.path####Arguments.id#">
+		<cfset sArgs.path = "#sArgs.path#/#Arguments.id#">
 	</cfif>
 	
-	<cfsavecontent variable="sArgs.xml"><cfoutput>
-	<request>
-		<notes><cfif StructKeyExists(Arguments,"notes")>#XmlFormat(Arguments.notes)#</cfif></notes>
-		<hours>#Arguments.hours#</hours>
-		<project_id type="integer">#Arguments.project_id#</project_id>
-		<task_id type="integer">#Arguments.task_id#</task_id>
-		<spent_at type="date">#DateFormat(Arguments.spent_at,"ddd, dd mmm yyyy")#</spent_at>
-	</request>
-	</cfoutput></cfsavecontent>
-	
-	<cfset callAPI(ArgumentCollection=sArgs)>
-	
-	<cfreturn getTimeEntryID(ArgumentCollection=Arguments)>
+	<cfif qUser.Email EQ Variables.instance.username>
+		<cfif NOT ListFindNoCase(ValueList(qTasks.id),Arguments.task_id)>
+			<!---<cfthrow message="Task '#getTaskName(Arguments.task_id)#' is not in project '#getProjectName(Arguments.project_id)#'." type="HarvestAPI">--->
+			<cfset callAPI(method='POST',path='/projects/#Arguments.project_id#/task_assignments',xml='<task><id type="integer">#Arguments.task_id#</id></task>')>
+		</cfif>
+		
+		<cfif NOT ListFindNoCase(ValueList(qUsers.user_id),Arguments.user_id)>
+			<cfset saveProjectUser(project_id=Arguments.project_id,user_id=Arguments.user_id)>
+		</cfif>
+		
+		<cfsavecontent variable="sArgs.xml"><cfoutput>
+		<request>
+			<notes><cfif StructKeyExists(Arguments,"notes")>#XmlFormat(Arguments.notes)#</cfif></notes>
+			<hours>#Round(Arguments.hours*100)/100#</hours>
+			<project_id type="integer">#Arguments.project_id#</project_id>
+			<task_id type="integer">#Arguments.task_id#</task_id>
+			<spent_at type="date">#DateFormat(Arguments.spent_at,"ddd, dd mmm yyyy")#</spent_at>
+		</request>
+		</cfoutput></cfsavecontent>
+		
+		<cfset callAPI(ArgumentCollection=sArgs)>
+		
+		<cfreturn getTimeEntryID(ArgumentCollection=Arguments)>
+	</cfif>
 </cffunction>
 
 <cffunction name="saveUser" access="public" output="no">
@@ -331,7 +471,7 @@
 	<cfset var sArgs = makeAPIArgs("/people/")>
 	
 	<cfif StructKeyExists(Arguments,"id")>
-		<cfset sArgs.path = "#sArgs.path####Arguments.id#">
+		<cfset sArgs.path = "#sArgs.path#/#Arguments.id#">
 		<cfset sArgs.method = "PUT">
 	</cfif>
 	
@@ -340,9 +480,9 @@
 		<first-name>#XmlFormat(Arguments.first_name)#</first-name>
 		<last-name>#XmlFormat(Arguments.last_name)#</last-name>
 		<email>#XmlFormat(Arguments.email)#</email>
-		<timezone>Central Time (US & Canada)</timezone><!--- ToDo: Need ability to specify time zones? --->
+		<timezone>Central Time (US &amp; Canada)</timezone><!--- ToDo: Need ability to specify time zones? --->
 		<is-admin type="boolean"><cfif Arguments.is_admin>true<cfelse>false</cfif></is-admin>
-		<telephone>#XmlFormat(Arguments.telephone)#</telephone>
+		<cfif StructKeyExists(Arguments,"telephone")><telephone>#XmlFormat(Arguments.telephone)#</telephone></cfif>
 	</user>
 	</cfoutput></cfsavecontent>
 	
@@ -358,11 +498,16 @@
 	
 	<cfset var CFHTTP = "">
 	<cfset var result = "">
+	<cfset var xError = 0>
 	
 	<cfif Left(Arguments.path,1) NEQ "/">
 		<cfset Arguments.path = "/#Arguments.path#">
 	</cfif>
 	
+	<cfif Len(Arguments.xml) AND NOT isXml(Arguments.xml)>
+		<cfthrow message="XML is not valid: #Arguments.xml#" type="HarvestAPI">
+	</cfif>
+		
 	<cfhttp
 		url="http://#Variables.instance.subdomain#.harvestapp.com#Arguments.path#"
 		username="#Variables.instance.username#"
@@ -377,7 +522,14 @@
 	</cfhttp>
 	
 	<cfif Left(Trim(CFHTTP.Statuscode),1) NEQ "2">
-		<cfthrow message="#CFHTTP.FileContent#" type="HarvestAPI">
+		<cfif isXml(CFHTTP.FileContent)>
+			<cfset xError = XmlParse(CFHTTP.FileContent)>
+			<cfif StructKeyExists(xError,"request") AND StructKeyExists(xError.request,"message")>
+				<cfthrow message="#xError.request.message.XmlText#" type="HarvestAPI" detail="#arguments.xml#">
+			</cfif>
+		</cfif>
+		<!--- This will only throw if the above failed to get the error message from the XML returned. --->
+		<cfthrow message="#CFHTTP.FileContent#" type="HarvestAPI" detail="#SerializeJSON(Arguments)#">
 	</cfif>
 	
 	<cfset result = CFHTTP.FileContent>
@@ -411,7 +563,7 @@
 	<cfreturn qResults>
 </cffunction>
 
-<cffunction name="getData" access="private" returntype="any" output="no">
+<cffunction name="getData" access="public" returntype="any" output="no">
 	<cfargument name="path" type="string" required="true">
 	<cfargument name="Args" type="struct" required="false">
 	<cfargument name="format" type="string" required="false">
@@ -441,7 +593,14 @@
 	
 	<cfswitch expression="#Arguments.format#">
 	<cfcase value="query">
-		<cfset result = convertToQuery(XmlParse(Trim(result)),sDefinitions[Arguments.key]["xmlpath"],sDefinitions[Arguments.key]["columns"])>
+		<cfif isXml(Trim(result))>
+			<cfset result = convertToQuery(XmlParse(Trim(result)),sDefinitions[Arguments.key]["xmlpath"],sDefinitions[Arguments.key]["columns"])>
+			<cfif StructCount(Arguments.Args)>
+				<cfset result = QueryFilter(result,Arguments.Args)>
+			</cfif>
+		<cfelse>
+			<cfoutput>#result#</cfoutput>
+		</cfif>
 	</cfcase>
 	<cfcase value="xml">
 		<cfset result = XmlParse(Trim(result))>
@@ -457,7 +616,7 @@
 	
 	<cfset var result = DateFormat(Arguments.date,"yyyy-mm-dd") & TimeFormat(Arguments.date,"HH:mm")>
 	
-	<cfset var result = URLEncodedFormat(result)>
+	<cfset result = URLEncodedFormat(result)>
 	
 	<cfreturn result>
 </cffunction>
@@ -496,6 +655,43 @@
 	</cfif>
 	
 	<cfreturn path>
+</cffunction>
+
+<cffunction name="QueryFilter" access="private" returntype="query" output="no">
+	<cfargument name="query" type="query" required="true">
+	<cfargument name="args" type="struct" required="true">
+	
+	<cfset var sArgs = Arguments.args>
+	<cfset var result = Arguments.query>
+	<cfset var item = "">
+	<cfset var aQueryData = getMetaData(result)>
+	<cfset var sQueryData = StructNew()>
+	<cfset var ii = 0>
+	<cfset var isText = false>
+	
+	<!--- Convert query meta data to a structure for ease of use --->
+	<cfloop index="ii" from="1" to="#ArrayLen(aQueryData)#">
+		<cfset sQueryData[aQueryData[ii]["Name"]] = aQueryData[ii]>
+	</cfloop>
+	
+	<!--- Filter the query --->
+	<cfquery name="result" dbtype="query">
+	SELECT	*
+	FROM	result
+	WHERE	1 = 1
+	<cfloop collection="#sArgs#" item="item">
+		<cfif StructKeyExists(sQueryData,item) AND isSimpleValue(sArgs[item])>
+			<cfif StructKeyExists(sQueryData[item],"TypeName")>
+				<cfset isText = ( sQueryData[item].TypeName CONTAINS "char" )>
+			<cfelse>
+				<cfset isText = ( Len(ReReplaceNoCase(ArrayToList(query[item]),"(,|[0-9])*","","ALL")) GT 0)>
+			</cfif>
+		AND	#item# = <cfif isText>'#sArgs[item]#'<cfelse>#sArgs[item]#</cfif>
+		</cfif>
+	</cfloop>
+	</cfquery>
+	
+	<cfreturn result>
 </cffunction>
 
 </cfcomponent>
